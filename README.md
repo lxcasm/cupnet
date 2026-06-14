@@ -1,4 +1,4 @@
-# CupNet
+# CupNet v2.1
 
 Application Windows de **contrôle réseau local** — scan ARP, surveillance et coupure de connexion.
 
@@ -10,47 +10,38 @@ Application Windows de **contrôle réseau local** — scan ARP, surveillance et
 
 ## Lancer CupNet
 
-**Double-cliquez sur `CupNet.bat`** — c'est le seul fichier à utiliser.
+**Double-cliquez sur `CupNet.bat`**
 
-1. Acceptez la fenêtre **UAC** (admin) pour la coupure ARP
-2. Cliquez **Scanner le réseau**
-3. Sélectionnez un appareil → **Couper la connexion**
-
-**Prérequis :** Windows 10/11, Python 3.10+ (installé auto au 1er lancement), [Npcap](https://npcap.com/) pour l'ARP.
+1. Écran de chargement au démarrage
+2. Acceptez **UAC** (admin) pour la coupure ARP
+3. **Scanner le réseau** → sélectionner → **Couper la connexion**
 
 ---
 
-## Structure du projet
+## Options (bouton ⚙)
+
+| Option | Description |
+|--------|-------------|
+| **Masquer les IP** | Affiche `192.***.***.***` dans le tableau |
+| **Agrandir le tableau** | Cache le bas de page pour plus d'appareils visibles |
+| **Temps de chargement** | Durée du splash au démarrage (0–5 s) |
+
+---
+
+## Prérequis
+
+Windows 10/11 · Python 3.10+ (auto) · [Npcap](https://npcap.com/) pour l'ARP
+
+---
+
+## Structure
 
 ```
 cupnet/
-├── CupNet.bat          ← LANCER ICI
-├── LISEZMOI.txt        ← Instructions rapides
-├── README.md
-├── backend/            ← Code Python (ne pas ouvrir)
-└── scripts/
-    └── build.bat       ← Compilation exe (optionnel, dev)
-```
-
-**Ne pas ouvrir** `backend/dist/CupNet.exe` — c'est une ancienne compilation. Utilisez toujours `CupNet.bat`.
-
----
-
-## Fonctionnalités
-
-- Scan réseau (IP, MAC, fabricant, latence, temps en ligne)
-- Coupure ARP bidirectionnelle (Scapy + Npcap)
-- Pare-feu local et ping flood (démonstration)
-- Interface rose/violet, temps de blocage en direct
-
----
-
-## Compilation exe (optionnel)
-
-Réservé aux développeurs — **inutile pour utiliser CupNet** :
-
-```
-scripts\build.bat
+├── CupNet.bat       ← lancer ici
+├── LISEZMOI.txt
+├── backend/         ← code source
+└── scripts/         ← outils dev
 ```
 
 ---

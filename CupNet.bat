@@ -35,7 +35,7 @@ if errorlevel 1 (
 
 :: --- Lancement ---
 echo.
-echo  [2/2] CupNet v2.0 — par lxcasm
+echo  [2/2] CupNet v2.1 — par lxcasm
 echo  Cliquez OUI sur la fenetre UAC ^(admin^).
 echo.
 

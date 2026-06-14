@@ -6,11 +6,19 @@ import customtkinter as ctk
 
 from app.core.device_manager import DeviceManager
 from app.core.network_utils import format_duration
+from app.gui.settings import AppSettings
 from app.gui.theme import GIRO
 from app.models.device import BlockMethod, Device
 
-APP_VERSION = "2.0"
+APP_VERSION = "2.1"
 CREATOR = "lxcasm"
+
+
+def mask_ip(ip: str) -> str:
+    parts = ip.split(".")
+    if len(parts) == 4:
+        return f"{parts[0]}.***.***.***"
+    return "••• masquée •••"
 
 METHOD_LABELS = {
     BlockMethod.ARP_SPOOF: "Coupure réseau (ARP)",
@@ -24,12 +32,15 @@ class CupNetApp(ctk.CTk):
         super().__init__()
 
         self.manager = DeviceManager()
+        self.settings = AppSettings()
         self._scanning = False
         self._tick_job: str | None = None
+        self._splash_job: str | None = None
+        self._options_visible = False
 
         self.title(f"CupNet v{APP_VERSION} — contrôle réseau")
-        self.geometry("1180x740")
-        self.minsize(980, 640)
+        self.geometry("1280x820")
+        self.minsize(1000, 700)
         self.configure(fg_color=GIRO["bg"])
 
         ctk.set_appearance_mode("dark")
@@ -38,11 +49,12 @@ class CupNetApp(ctk.CTk):
         self._build_ui()
         self._load_methods_info()
         self._check_admin()
+        self._show_splash()
         self._start_tick()
 
     def _build_ui(self) -> None:
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(4, weight=1)
+        self.grid_rowconfigure(5, weight=1)
 
         # Bandeau rose
         stripe = ctk.CTkFrame(self, height=5, fg_color=GIRO["pink"], corner_radius=0)
@@ -106,9 +118,84 @@ class CupNetApp(ctk.CTk):
         )
         self.scan_btn.pack(side="left")
 
+        self.options_btn = ctk.CTkButton(
+            row,
+            text="⚙",
+            width=38,
+            height=38,
+            fg_color=GIRO["violet_dark"],
+            hover_color=GIRO["violet"],
+            command=self._toggle_options,
+        )
+        self.options_btn.pack(side="left", padx=(8, 0))
+
+        # Panneau options (caché)
+        self.options_frame = ctk.CTkFrame(self, fg_color=GIRO["bg_card"], border_width=1, border_color=GIRO["violet"])
+        self.options_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 6))
+        self.options_frame.grid_columnconfigure((0, 1, 2), weight=1)
+
+        ctk.CTkLabel(
+            self.options_frame,
+            text="Options",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=GIRO["pink_light"],
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=14, pady=(10, 6))
+
+        self.hide_ip_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            self.options_frame,
+            text="Masquer les adresses IP",
+            variable=self.hide_ip_var,
+            command=self._on_hide_ip_toggle,
+            fg_color=GIRO["pink"],
+            hover_color=GIRO["pink_dark"],
+            text_color=GIRO["text"],
+        ).grid(row=1, column=0, sticky="w", padx=14, pady=4)
+
+        self.expand_table_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            self.options_frame,
+            text="Agrandir le tableau (masquer infos bas)",
+            variable=self.expand_table_var,
+            command=self._on_expand_table_toggle,
+            fg_color=GIRO["pink"],
+            hover_color=GIRO["pink_dark"],
+            text_color=GIRO["text"],
+        ).grid(row=1, column=1, sticky="w", padx=14, pady=4)
+
+        ctk.CTkLabel(
+            self.options_frame,
+            text="Temps de chargement (s) :",
+            text_color=GIRO["text_muted"],
+        ).grid(row=1, column=2, sticky="e", padx=(0, 6), pady=4)
+
+        self.splash_slider = ctk.CTkSlider(
+            self.options_frame,
+            from_=0,
+            to=5,
+            number_of_steps=10,
+            width=140,
+            fg_color=GIRO["violet_dark"],
+            progress_color=GIRO["pink"],
+            button_color=GIRO["pink_light"],
+            command=self._on_splash_slider,
+        )
+        self.splash_slider.set(self.settings.splash_seconds)
+        self.splash_slider.grid(row=2, column=2, sticky="e", padx=14, pady=(0, 12))
+
+        self.splash_value_label = ctk.CTkLabel(
+            self.options_frame,
+            text=f"{self.settings.splash_seconds:.1f}s au prochain lancement",
+            font=ctk.CTkFont(size=11),
+            text_color=GIRO["text_muted"],
+        )
+        self.splash_value_label.grid(row=2, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 12))
+
+        self.options_frame.grid_remove()
+
         # Stats
         stats = ctk.CTkFrame(self, fg_color="transparent")
-        stats.grid(row=2, column=0, sticky="ew", padx=20, pady=(12, 6))
+        stats.grid(row=3, column=0, sticky="ew", padx=20, pady=(12, 6))
         stats.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
         self.stat_devices = self._stat_card(stats, "Appareils", "0", 0)
@@ -118,7 +205,7 @@ class CupNetApp(ctk.CTk):
 
         # Barre de progression scan
         progress_frame = ctk.CTkFrame(self, fg_color=GIRO["bg_card"], corner_radius=10)
-        progress_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 6))
+        progress_frame.grid(row=4, column=0, sticky="ew", padx=20, pady=(0, 6))
         progress_frame.grid_columnconfigure(0, weight=1)
 
         self.progress_label = ctk.CTkLabel(
@@ -147,7 +234,7 @@ class CupNetApp(ctk.CTk):
             border_width=1,
             border_color=GIRO["violet_dark"],
         )
-        table_frame.grid(row=4, column=0, sticky="nsew", padx=20, pady=(0, 10))
+        table_frame.grid(row=5, column=0, sticky="nsew", padx=20, pady=(0, 10))
         table_frame.grid_columnconfigure(0, weight=1)
         table_frame.grid_rowconfigure(1, weight=1)
 
@@ -166,7 +253,7 @@ class CupNetApp(ctk.CTk):
             foreground=GIRO["text"],
             fieldbackground=GIRO["bg_table"],
             borderwidth=0,
-            rowheight=30,
+            rowheight=28,
             font=("Segoe UI", 10),
         )
         style.configure(
@@ -235,7 +322,7 @@ class CupNetApp(ctk.CTk):
             border_width=1,
             border_color=GIRO["violet_dark"],
         )
-        action_bar.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 10))
+        action_bar.grid(row=6, column=0, sticky="ew", padx=20, pady=(0, 10))
         action_bar.grid_columnconfigure(2, weight=1)
 
         ctk.CTkLabel(action_bar, text="Méthode :", text_color=GIRO["text_muted"]).grid(
@@ -277,18 +364,18 @@ class CupNetApp(ctk.CTk):
         self.unblock_btn.grid(row=0, column=4, padx=(6, 14), pady=14)
 
         # Footer
-        methods_frame = ctk.CTkFrame(self, fg_color=GIRO["bg_card"])
-        methods_frame.grid(row=6, column=0, sticky="ew", padx=20, pady=(0, 8))
+        self.methods_frame = ctk.CTkFrame(self, fg_color=GIRO["bg_card"])
+        self.methods_frame.grid(row=7, column=0, sticky="ew", padx=20, pady=(0, 8))
 
         ctk.CTkLabel(
-            methods_frame,
+            self.methods_frame,
             text="Méthodes de coupure",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color=GIRO["violet"],
         ).pack(anchor="w", padx=14, pady=(10, 4))
 
         self.methods_text = ctk.CTkTextbox(
-            methods_frame,
+            self.methods_frame,
             height=72,
             font=ctk.CTkFont(size=12),
             fg_color=GIRO["bg_table"],
@@ -298,12 +385,13 @@ class CupNetApp(ctk.CTk):
         self.methods_text.pack(fill="x", padx=14, pady=(0, 10))
         self.methods_text.configure(state="disabled")
 
-        ctk.CTkLabel(
+        self.footer_label = ctk.CTkLabel(
             self,
             text=f"⚠️ Usage éducatif — par {CREATOR} · github.com/{CREATOR}",
             font=ctk.CTkFont(size=11),
             text_color=GIRO["text_muted"],
-        ).grid(row=7, column=0, pady=(0, 4))
+        )
+        self.footer_label.grid(row=8, column=0, pady=(0, 4))
 
         self.status_label = ctk.CTkLabel(
             self,
@@ -311,7 +399,51 @@ class CupNetApp(ctk.CTk):
             font=ctk.CTkFont(size=11),
             text_color=GIRO["text_muted"],
         )
-        self.status_label.grid(row=8, column=0, pady=(0, 12))
+        self.status_label.grid(row=9, column=0, pady=(0, 12))
+
+        # Écran de chargement (splash)
+        self.splash_overlay = ctk.CTkFrame(self, fg_color=GIRO["bg"], corner_radius=0)
+        self.splash_overlay.grid(row=0, column=0, rowspan=10, sticky="nsew")
+        self.splash_overlay.grid_columnconfigure(0, weight=1)
+        self.splash_overlay.grid_rowconfigure(0, weight=1)
+
+        splash_box = ctk.CTkFrame(self.splash_overlay, fg_color=GIRO["bg_card"], border_width=1, border_color=GIRO["pink"])
+        splash_box.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.42, relheight=0.32)
+
+        ctk.CTkLabel(
+            splash_box,
+            text="CupNet",
+            font=ctk.CTkFont(size=36, weight="bold"),
+            text_color=GIRO["pink"],
+        ).pack(pady=(28, 4))
+
+        ctk.CTkLabel(
+            splash_box,
+            text=f"par {CREATOR} · v{APP_VERSION}",
+            font=ctk.CTkFont(size=13),
+            text_color=GIRO["accent"],
+        ).pack(pady=(0, 16))
+
+        self.splash_status = ctk.CTkLabel(
+            splash_box,
+            text="Chargement…",
+            font=ctk.CTkFont(size=12),
+            text_color=GIRO["text_muted"],
+        )
+        self.splash_status.pack(pady=(0, 8))
+
+        self.splash_bar = ctk.CTkProgressBar(
+            splash_box,
+            width=280,
+            height=12,
+            fg_color=GIRO["violet_dark"],
+            progress_color=GIRO["pink"],
+        )
+        self.splash_bar.pack(pady=(0, 24))
+        self.splash_bar.set(0)
+
+        self._splash_step = 0
+        self._splash_steps = 1
 
     def _stat_card(
         self, parent: ctk.CTkFrame, label: str, value: str, col: int, color: str | None = None
@@ -350,6 +482,84 @@ class CupNetApp(ctk.CTk):
                 text="● Pas admin — coupez en ARP impossible",
                 text_color=GIRO["pink_light"],
             )
+
+    def _toggle_options(self) -> None:
+        if self._options_visible:
+            self.options_frame.grid_remove()
+            self._options_visible = False
+        else:
+            self.options_frame.grid()
+            self._options_visible = True
+
+    def _display_ip(self, ip: str) -> str:
+        if self.settings.hide_ip:
+            return mask_ip(ip)
+        return ip
+
+    def _on_hide_ip_toggle(self) -> None:
+        self.settings.hide_ip = self.hide_ip_var.get()
+        if self.manager.get_devices():
+            self._refresh_table(self.manager.get_devices(), keep_selection=True)
+        mac = self._get_selected_mac()
+        if mac:
+            self._on_select_device()
+
+    def _on_expand_table_toggle(self) -> None:
+        self.settings.expand_table = self.expand_table_var.get()
+        self._apply_expand_table()
+
+    def _apply_expand_table(self) -> None:
+        if self.settings.expand_table:
+            self.methods_frame.grid_remove()
+            self.footer_label.grid_remove()
+            self.detail_label.grid_remove()
+            self.geometry("1280x860")
+        else:
+            self.methods_frame.grid()
+            self.footer_label.grid()
+            self.detail_label.grid()
+            self.geometry("1280x820")
+
+    def _on_splash_slider(self, value: float) -> None:
+        self.settings.splash_seconds = round(value, 1)
+        self.splash_value_label.configure(
+            text=f"{self.settings.splash_seconds:.1f}s au prochain lancement"
+        )
+
+    def _show_splash(self) -> None:
+        duration = max(0.0, self.settings.splash_seconds)
+        if duration <= 0:
+            self.splash_overlay.grid_remove()
+            return
+        self.splash_overlay.lift()
+        self._splash_step = 0
+        self._splash_steps = max(12, int(duration * 24))
+        self._animate_splash()
+
+    def _animate_splash(self) -> None:
+        self._splash_step += 1
+        pct = min(1.0, self._splash_step / self._splash_steps)
+        self.splash_bar.set(pct)
+        if pct < 0.35:
+            self.splash_status.configure(text="Initialisation…")
+        elif pct < 0.75:
+            self.splash_status.configure(text="Chargement de l'interface…")
+        else:
+            self.splash_status.configure(text="Prêt")
+        if self._splash_step >= self._splash_steps:
+            self.splash_overlay.grid_remove()
+            return
+        delay = max(40, int(self.settings.splash_seconds * 1000 / self._splash_steps))
+        self._splash_job = self.after(delay, self._animate_splash)
+
+    def _format_device_summary(self, mac: str) -> str:
+        text = self.manager.get_device_summary(mac)
+        if not self.settings.hide_ip or not text:
+            return text
+        device = next((d for d in self.manager.get_devices() if d.mac == mac), None)
+        if device:
+            return text.replace(device.ip, mask_ip(device.ip))
+        return text
 
     def _show_progress(self, visible: bool) -> None:
         if visible:
@@ -421,7 +631,7 @@ class CupNetApp(ctk.CTk):
         method = METHOD_LABELS.get(device.block_method, "—") if device.blocked else "—"
         return (
             status,
-            device.ip,
+            self._display_ip(device.ip),
             device.mac,
             device.hostname or "—",
             device.vendor or "—",
@@ -450,7 +660,7 @@ class CupNetApp(ctk.CTk):
     def _on_select_device(self, _event=None) -> None:
         mac = self._get_selected_mac()
         if mac:
-            self.detail_label.configure(text=self.manager.get_device_summary(mac))
+            self.detail_label.configure(text=self._format_device_summary(mac))
 
     def _on_scan_click(self) -> None:
         if self._scanning:
@@ -508,7 +718,7 @@ class CupNetApp(ctk.CTk):
             return
 
         method = self._method_from_label(self.method_var.get())
-        ip = device.ip if device else mac
+        ip = self._display_ip(device.ip) if device else mac
 
         if not messagebox.askyesno(
             "Confirmer la coupure",
@@ -557,13 +767,15 @@ class CupNetApp(ctk.CTk):
         self._refresh_table(self.manager.get_devices())
         mac = self._get_selected_mac()
         if mac:
-            self.detail_label.configure(text=self.manager.get_device_summary(mac))
+            self.detail_label.configure(text=self._format_device_summary(mac))
         self._set_status(message)
         messagebox.showinfo("Succès", message)
 
     def destroy(self) -> None:
         if self._tick_job:
             self.after_cancel(self._tick_job)
+        if self._splash_job:
+            self.after_cancel(self._splash_job)
         super().destroy()
 
 
