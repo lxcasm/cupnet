@@ -1,15 +1,30 @@
 $ErrorActionPreference = "Stop"
-$backend = Join-Path (Split-Path $PSScriptRoot -Parent) "backend"
-$python = Join-Path $backend ".venv\Scripts\python.exe"
-$main = Join-Path $backend "main.py"
 
-if (-not (Test-Path $python)) {
+$root = Split-Path $PSScriptRoot -Parent
+$backend = Join-Path $root "backend"
+$pythonw = Join-Path $backend ".venv\Scripts\pythonw.exe"
+$python = Join-Path $backend ".venv\Scripts\python.exe"
+
+if (Test-Path $pythonw) {
+    $exe = $pythonw
+} elseif (Test-Path $python) {
+    $exe = $python
+} else {
     Write-Host ""
-    Write-Host "  ERREUR : installation incomplete."
-    Write-Host "  Relancez CupNet.bat"
+    Write-Host "  ERREUR : Python introuvable."
+    Write-Host "  Relancez CupNet.bat pour installer."
     Write-Host ""
     Read-Host "Entree pour fermer"
     exit 1
 }
 
-Start-Process -FilePath $python -ArgumentList "`"$main`"" -WorkingDirectory $backend -Verb RunAs
+try {
+    Start-Process -FilePath $exe -ArgumentList "main.py" -WorkingDirectory $backend -Verb RunAs
+    exit 0
+} catch {
+    Write-Host ""
+    Write-Host "  Echec lancement admin : $_"
+    Write-Host "  Lancement sans admin..."
+    Start-Process -FilePath $exe -ArgumentList "main.py" -WorkingDirectory $backend
+    exit 0
+}
