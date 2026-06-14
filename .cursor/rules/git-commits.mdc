@@ -1,0 +1,10 @@
+---
+description: Commits Git sans co-auteur Cursor sur GitHub
+alwaysApply: true
+---
+
+# Commits Git
+
+- Ne jamais ajouter `Co-authored-by: Cursor` ni aucun trailer de co-auteur dans les messages de commit.
+- Les commits doivent n'avoir que lxcasm comme auteur visible sur GitHub.
+- Utiliser des messages de commit simples, sans ligne `Co-authored-by:`.
