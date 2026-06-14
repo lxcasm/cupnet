@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-title CupNet v2.0
+title CupNet v2.1
 cd /d "%~dp0backend"
 
 set "PY=%CD%\.venv\Scripts\python.exe"

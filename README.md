@@ -15,9 +15,10 @@ Application Windows de **contrôle réseau local** — scan ARP, surveillance et
 
 1. Écran de chargement au démarrage
 2. Acceptez **UAC** (admin) pour la coupure ARP
-3. **Scanner le réseau** → sélectionner → **Couper la connexion**
+3. Si **Npcap** est absent, CupNet propose de le télécharger et l'installer
+4. **Scanner le réseau** → sélectionner → **Couper la connexion**
 
-**Prérequis :** Windows 10/11 · Python 3.10+ (installé auto) · [Npcap](https://npcap.com/)
+**Prérequis :** Windows 10/11 · Python 3.10+ (installé auto) · [Npcap](https://npcap.com/) (proposé au lancement)
 
 ---
 

@@ -11,7 +11,7 @@
 
   COUPURE RESEAU (ARP)
   ────────────────────
-  Acceptez UAC (admin) · Installez Npcap : https://npcap.com
+  Acceptez UAC (admin). Si Npcap manque, CupNet propose de l'installer au lancement.
 
   GITHUB
   ──────

@@ -1,17 +1,26 @@
 import threading
 import tkinter.ttk as ttk
+import webbrowser
+from pathlib import Path
 from tkinter import messagebox
 
 import customtkinter as ctk
 
 from app.core.device_manager import DeviceManager
 from app.core.network_utils import format_duration
+from app.core.npcap_utils import (
+    NPCAP_SITE,
+    download_npcap,
+    is_npcap_installed,
+    run_npcap_installer,
+)
 from app.gui.settings import AppSettings
 from app.gui.theme import GIRO
 from app.models.device import BlockMethod, Device
 
 APP_VERSION = "2.1"
 CREATOR = "lxcasm"
+GITHUB_URL = f"https://github.com/{CREATOR}"
 
 
 def mask_ip(ip: str) -> str:
@@ -48,6 +57,7 @@ class CupNetApp(ctk.CTk):
         self._options_visible = False
         self._cached_network = "—"
         self._cached_interface = "—"
+        self._startup_finished = False
 
         self.title(f"CupNet v{APP_VERSION} — contrôle réseau")
         self.geometry("1280x820")
@@ -552,6 +562,7 @@ class CupNetApp(ctk.CTk):
         duration = max(0.0, self.settings.splash_seconds)
         if duration <= 0:
             self.splash_overlay.grid_remove()
+            self.after(150, self._ensure_npcap)
             return
         self.splash_overlay.lift()
         self._splash_step = 0
@@ -570,9 +581,216 @@ class CupNetApp(ctk.CTk):
             self.splash_status.configure(text="Prêt")
         if self._splash_step >= self._splash_steps:
             self.splash_overlay.grid_remove()
+            self._ensure_npcap()
             return
         delay = max(40, int(self.settings.splash_seconds * 1000 / self._splash_steps))
         self._splash_job = self.after(delay, self._animate_splash)
+
+    def _finish_startup(self) -> None:
+        if self._startup_finished:
+            return
+        self._startup_finished = True
+        self._show_profile_popup()
+
+    def _ensure_npcap(self) -> None:
+        if is_npcap_installed():
+            self._finish_startup()
+            return
+
+        if not self.manager.is_admin:
+            messagebox.showwarning(
+                "Npcap requis",
+                "Npcap n'est pas installé sur ce PC.\n\n"
+                "Relancez CupNet en administrateur (cliquez OUI sur UAC) "
+                "pour pouvoir l'installer automatiquement.\n\n"
+                f"Installation manuelle : {NPCAP_SITE}",
+            )
+            self.status_label.configure(text="⚠ Npcap absent — scan ARP indisponible")
+            self._finish_startup()
+            return
+
+        if not messagebox.askyesno(
+            "Installer Npcap ?",
+            "Npcap n'est pas détecté.\n\n"
+            "Il est nécessaire pour scanner le réseau et la coupure ARP.\n\n"
+            "CupNet va télécharger l'installateur officiel puis l'ouvrir.\n"
+            "Acceptez la licence dans la fenêtre Npcap.\n\n"
+            "Continuer ?",
+        ):
+            self.status_label.configure(text="⚠ Npcap absent — scan ARP indisponible")
+            self._finish_startup()
+            return
+
+        self._run_npcap_install()
+
+    def _run_npcap_install(self) -> None:
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Installation Npcap")
+        dialog.resizable(False, False)
+        dialog.configure(fg_color=GIRO["bg"])
+        dialog.transient(self)
+        dialog.grab_set()
+
+        width, height = 460, 220
+        dialog.update_idletasks()
+        x = self.winfo_x() + max(0, (self.winfo_width() - width) // 2)
+        y = self.winfo_y() + max(0, (self.winfo_height() - height) // 2)
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+        box = ctk.CTkFrame(
+            dialog,
+            fg_color=GIRO["bg_card"],
+            border_width=1,
+            border_color=GIRO["pink"],
+            corner_radius=12,
+        )
+        box.pack(fill="both", expand=True, padx=16, pady=16)
+
+        title = ctk.CTkLabel(
+            box,
+            text="Installation de Npcap",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=GIRO["pink"],
+        )
+        title.pack(pady=(18, 8))
+
+        status = ctk.CTkLabel(
+            box,
+            text="Préparation…",
+            font=ctk.CTkFont(size=12),
+            text_color=GIRO["text_muted"],
+        )
+        status.pack(pady=(0, 10))
+
+        bar = ctk.CTkProgressBar(
+            box,
+            width=360,
+            height=12,
+            fg_color=GIRO["violet_dark"],
+            progress_color=GIRO["pink"],
+        )
+        bar.pack(pady=(0, 18))
+        bar.set(0)
+
+        def on_progress(pct: int, message: str) -> None:
+            status.configure(text=message)
+            bar.set(max(0.05, min(1.0, pct / 100)))
+
+        def on_error(error: str) -> None:
+            dialog.grab_release()
+            dialog.destroy()
+            messagebox.showerror(
+                "Npcap",
+                f"Impossible d'installer Npcap automatiquement.\n\n{error}\n\n"
+                f"Téléchargez-le manuellement : {NPCAP_SITE}",
+            )
+            self.status_label.configure(text="⚠ Npcap absent — scan ARP indisponible")
+            self._finish_startup()
+
+        def on_done(code: int, message: str) -> None:
+            dialog.grab_release()
+            dialog.destroy()
+            if is_npcap_installed():
+                if code == 3010:
+                    messagebox.showinfo(
+                        "Npcap installé",
+                        f"{message}\n\nRedémarrez le PC si le scan échoue encore.",
+                    )
+                else:
+                    messagebox.showinfo("Npcap installé", "Npcap est prêt. Vous pouvez scanner le réseau.")
+                self.status_label.configure(text="Npcap détecté — prêt à scanner")
+            else:
+                messagebox.showwarning(
+                    "Npcap",
+                    f"{message}\n\nInstallez Npcap manuellement : {NPCAP_SITE}",
+                )
+                self.status_label.configure(text="⚠ Npcap absent — scan ARP indisponible")
+            self._finish_startup()
+
+        def worker() -> None:
+            try:
+                installer = download_npcap(
+                    on_progress=lambda pct, msg: self.after(
+                        0, lambda p=pct, m=msg: on_progress(p, m)
+                    )
+                )
+                self.after(0, lambda: on_progress(100, "Lancement de l'installateur Npcap…"))
+                code, message = run_npcap_installer(Path(installer))
+                self.after(0, lambda c=code, m=message: on_done(c, m))
+            except Exception as exc:
+                self.after(0, lambda e=str(exc): on_error(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_profile_popup(self) -> None:
+        popup = ctk.CTkToplevel(self)
+        popup.title("Créateur")
+        popup.resizable(False, False)
+        popup.configure(fg_color=GIRO["bg"])
+        popup.transient(self)
+        popup.grab_set()
+
+        width, height = 440, 300
+        popup.update_idletasks()
+        x = self.winfo_x() + max(0, (self.winfo_width() - width) // 2)
+        y = self.winfo_y() + max(0, (self.winfo_height() - height) // 2)
+        popup.geometry(f"{width}x{height}+{x}+{y}")
+
+        box = ctk.CTkFrame(
+            popup,
+            fg_color=GIRO["bg_card"],
+            border_width=1,
+            border_color=GIRO["pink"],
+            corner_radius=12,
+        )
+        box.pack(fill="both", expand=True, padx=16, pady=16)
+
+        ctk.CTkLabel(
+            box,
+            text="CupNet",
+            font=ctk.CTkFont(size=28, weight="bold"),
+            text_color=GIRO["pink"],
+        ).pack(pady=(20, 4))
+
+        ctk.CTkLabel(
+            box,
+            text=f"Projet par {CREATOR}",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=GIRO["text"],
+        ).pack(pady=(0, 8))
+
+        ctk.CTkLabel(
+            box,
+            text="Retrouvez le code source, les mises à jour\net mes autres projets sur GitHub.",
+            font=ctk.CTkFont(size=12),
+            text_color=GIRO["text_muted"],
+            justify="center",
+        ).pack(pady=(0, 16))
+
+        ctk.CTkButton(
+            box,
+            text=f"github.com/{CREATOR}",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=GIRO["violet"],
+            hover_color=GIRO["violet_dark"],
+            height=38,
+            command=lambda: webbrowser.open(GITHUB_URL),
+        ).pack(pady=(0, 10), padx=24, fill="x")
+
+        btn_row = ctk.CTkFrame(box, fg_color="transparent")
+        btn_row.pack(fill="x", padx=24, pady=(0, 18))
+
+        ctk.CTkButton(
+            btn_row,
+            text="Continuer",
+            fg_color=GIRO["pink"],
+            hover_color=GIRO["pink_dark"],
+            height=36,
+            command=popup.destroy,
+        ).pack(side="right")
+
+        popup.protocol("WM_DELETE_WINDOW", popup.destroy)
+        popup.focus_force()
 
     def _format_device_summary(self, mac: str) -> str:
         text = self.manager.get_device_summary(mac)
