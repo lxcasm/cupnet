@@ -42,15 +42,22 @@ if not exist "%PYTHON%" (
 )
 
 :: --- Test demarrage ---
+pushd "%BACKEND%"
 "%PYTHON%" -c "from app.gui.theme import GIRO" >nul 2>&1
-if errorlevel 1 (
-    echo.
-    echo  ERREUR : application corrompue ou incomplete.
-    echo  Relancez CupNet.bat ou reinstallez les dependances.
-    echo.
-    pause
-    exit /b 1
-)
+if errorlevel 1 goto :fail_start
+popd
+goto :start_ok
+
+:fail_start
+popd
+echo.
+echo  ERREUR : application corrompue ou incomplete.
+echo  Relancez CupNet.bat ou reinstallez les dependances.
+echo.
+pause
+exit /b 1
+
+:start_ok
 
 :: --- Lancement admin ---
 echo.
