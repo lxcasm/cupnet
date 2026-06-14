@@ -1,10 +1,13 @@
 $ErrorActionPreference = "Stop"
-$backend = Join-Path $PSScriptRoot "backend"
+$backend = Join-Path (Split-Path $PSScriptRoot -Parent) "backend"
 $python = Join-Path $backend ".venv\Scripts\python.exe"
 $main = Join-Path $backend "main.py"
 
 if (-not (Test-Path $python)) {
-    Write-Host "ERREUR: Python venv introuvable. Relancez LANCER-CupNet.bat"
+    Write-Host ""
+    Write-Host "  ERREUR : installation incomplete."
+    Write-Host "  Relancez CupNet.bat"
+    Write-Host ""
     Read-Host "Entree pour fermer"
     exit 1
 }
