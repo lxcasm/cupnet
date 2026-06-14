@@ -20,6 +20,15 @@ def mask_ip(ip: str) -> str:
         return f"{parts[0]}.***.***.***"
     return "••• masquée •••"
 
+
+def mask_network(network: str) -> str:
+    if "/" in network:
+        base, prefix = network.rsplit("/", 1)
+        parts = base.split(".")
+        if len(parts) == 4:
+            return f"{parts[0]}.***.***.0/{prefix}"
+    return mask_ip(network)
+
 METHOD_LABELS = {
     BlockMethod.ARP_SPOOF: "Coupure réseau (ARP)",
     BlockMethod.FIREWALL: "Pare-feu local (PC)",
@@ -37,6 +46,8 @@ class CupNetApp(ctk.CTk):
         self._tick_job: str | None = None
         self._splash_job: str | None = None
         self._options_visible = False
+        self._cached_network = "—"
+        self._cached_interface = "—"
 
         self.title(f"CupNet v{APP_VERSION} — contrôle réseau")
         self.geometry("1280x820")
@@ -498,11 +509,22 @@ class CupNetApp(ctk.CTk):
 
     def _on_hide_ip_toggle(self) -> None:
         self.settings.hide_ip = self.hide_ip_var.get()
+        self._update_network_label()
         if self.manager.get_devices():
             self._refresh_table(self.manager.get_devices(), keep_selection=True)
         mac = self._get_selected_mac()
         if mac:
             self._on_select_device()
+
+    def _update_network_label(self, network: str | None = None, interface: str | None = None) -> None:
+        if network is not None:
+            self._cached_network = network
+        if interface is not None:
+            self._cached_interface = interface
+        net = self._cached_network
+        if self.settings.hide_ip and net != "—":
+            net = mask_network(net)
+        self.network_label.configure(text=f"Réseau : {net} ({self._cached_interface})")
 
     def _on_expand_table_toggle(self) -> None:
         self.settings.expand_table = self.expand_table_var.get()
@@ -698,9 +720,7 @@ class CupNetApp(ctk.CTk):
         self._refresh_table(devices)
         duration = self.manager.last_duration_ms / 1000
         self.stat_duration.configure(text=f"{duration:.1f}s")
-        self.network_label.configure(
-            text=f"Réseau : {self.manager.last_network} ({self.manager.last_interface})"
-        )
+        self._update_network_label(self.manager.last_network, self.manager.last_interface)
         self._set_status(f"{len(devices)} appareil(s) détecté(s) en {duration:.1f}s")
 
         if warning:

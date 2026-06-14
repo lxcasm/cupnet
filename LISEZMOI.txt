@@ -1,22 +1,17 @@
 ╔══════════════════════════════════════════╗
 ║              C U P N E T                 ║
-║         par lxcasm — v2.0                ║
+║         par lxcasm — v2.1                ║
 ╚══════════════════════════════════════════╝
 
-  POUR LANCER L'APPLICATION
-  ─────────────────────────
+  LANCER L'APPLICATION
+  ────────────────────
   Double-cliquez sur :  CupNet.bat
 
-  NE PAS OUVRIR
-  ─────────────
-  × backend\dist\CupNet.exe   (ancienne version)
-  × backend\                  (code source)
-  × scripts\                  (outils dev)
+  Site web : https://lxcasm.github.io/cupnet
 
   COUPURE RESEAU (ARP)
   ────────────────────
-  Acceptez la fenetre UAC (admin) au lancement.
-  Installez Npcap : https://npcap.com
+  Acceptez UAC (admin) · Installez Npcap : https://npcap.com
 
   GITHUB
   ──────

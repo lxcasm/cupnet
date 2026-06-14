@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CupNet — Contrôle réseau par lxcasm</title>
+  <meta name="description" content="CupNet : scan ARP, surveillance et coupure réseau. Application Windows éducative par lxcasm." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="stripe"></div>
+
+  <header class="header">
+    <div class="container header-inner">
+      <div class="brand">
+        <h1>CupNet</h1>
+        <p>par <strong>lxcasm</strong> · contrôle & surveillance réseau</p>
+      </div>
+      <nav>
+        <a href="#features">Fonctions</a>
+        <a href="#install">Installation</a>
+        <a href="#options">Options</a>
+        <a href="https://github.com/lxcasm/cupnet" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero container">
+      <div class="hero-text">
+        <span class="badge">v2.1 · Windows</span>
+        <h2>Détectez et gérez les appareils sur votre réseau local</h2>
+        <p>
+          CupNet scanne votre LAN, affiche IP, MAC, latence et temps en ligne,
+          et permet de couper la connexion d'un appareil via ARP spoofing.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="https://github.com/lxcasm/cupnet/archive/refs/heads/main.zip">
+            Télécharger
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/lxcasm/cupnet" target="_blank" rel="noopener">
+            Voir sur GitHub
+          </a>
+        </div>
+        <p class="warn">⚠️ Usage éducatif uniquement — votre propre réseau, avec autorisation.</p>
+      </div>
+      <div class="hero-card">
+        <div class="mock-bar"></div>
+        <div class="mock-title">Appareils détectés</div>
+        <div class="mock-row"><span class="dot green"></span> En ligne · 192.***.***.***</div>
+        <div class="mock-row"><span class="dot green"></span> En ligne · 192.***.***.***</div>
+        <div class="mock-row"><span class="dot red"></span> Bloqué · 192.***.***.***</div>
+        <div class="mock-progress"><span></span></div>
+        <p class="mock-caption">Interface rose · masquage IP · scan ARP</p>
+      </div>
+    </section>
+
+    <section id="features" class="section container">
+      <h2>Fonctionnalités</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>Scan réseau</h3>
+          <p>ARP + ping : IP, MAC, fabricant, latence et temps sur le réseau.</p>
+        </article>
+        <article class="card">
+          <h3>Coupure ARP</h3>
+          <p>Coupe bidirectionnelle cible ↔ box. Nécessite admin + Npcap.</p>
+        </article>
+        <article class="card">
+          <h3>Surveillance</h3>
+          <p>Temps de blocage en direct, détail par appareil, session active.</p>
+        </article>
+        <article class="card">
+          <h3>Confidentialité</h3>
+          <p>Option pour masquer les IP dans le tableau et le réseau affiché.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="install" class="section container">
+      <h2>Installation</h2>
+      <ol class="steps">
+        <li>
+          <strong>Téléchargez</strong> le projet depuis
+          <a href="https://github.com/lxcasm/cupnet">GitHub</a> (bouton Code → ZIP).
+        </li>
+        <li>
+          <strong>Installez</strong> <a href="https://npcap.com" target="_blank" rel="noopener">Npcap</a>
+          et Python 3.10+ si ce n'est pas déjà fait.
+        </li>
+        <li>
+          <strong>Double-cliquez</strong> sur <code>CupNet.bat</code> à la racine du dossier.
+        </li>
+        <li>
+          <strong>Acceptez UAC</strong> (admin) pour activer la coupure réseau ARP.
+        </li>
+        <li>
+          Cliquez <strong>Scanner le réseau</strong>, sélectionnez un appareil, coupez ou débloquez.
+        </li>
+      </ol>
+      <p class="note">Aucun .exe à compiler : <code>CupNet.bat</code> installe et lance tout automatiquement.</p>
+    </section>
+
+    <section id="options" class="section container">
+      <h2>Options ⚙</h2>
+      <p>Dans l'app, cliquez sur l'engrenage en haut à droite :</p>
+      <ul class="options-list">
+        <li><strong>Masquer les IP</strong> — masque les adresses dans le tableau et le réseau en haut</li>
+        <li><strong>Agrandir le tableau</strong> — plus d'appareils visibles à l'écran</li>
+        <li><strong>Temps de chargement</strong> — splash au démarrage (0 à 5 secondes)</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer-inner">
+      <p>CupNet · projet éducatif cybersécurité</p>
+      <p>
+        <a href="https://github.com/lxcasm">lxcasm</a>
+        ·
+        <a href="https://github.com/lxcasm/cupnet">GitHub</a>
+      </p>
+    </div>
+  </footer>
+</body>
+</html>

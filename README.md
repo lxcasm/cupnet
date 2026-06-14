@@ -2,7 +2,8 @@
 
 Application Windows de **contrôle réseau local** — scan ARP, surveillance et coupure de connexion.
 
-**Auteur :** [lxcasm](https://github.com/lxcasm)
+**Auteur :** [lxcasm](https://github.com/lxcasm)  
+**Site :** [lxcasm.github.io/cupnet](https://lxcasm.github.io/cupnet)
 
 > Usage strictement éducatif — sur votre propre réseau, avec autorisation.
 
@@ -10,27 +11,23 @@ Application Windows de **contrôle réseau local** — scan ARP, surveillance et
 
 ## Lancer CupNet
 
-**Double-cliquez sur `CupNet.bat`**
+**Double-cliquez sur `CupNet.bat`** — c'est tout.
 
 1. Écran de chargement au démarrage
 2. Acceptez **UAC** (admin) pour la coupure ARP
 3. **Scanner le réseau** → sélectionner → **Couper la connexion**
 
+**Prérequis :** Windows 10/11 · Python 3.10+ (installé auto) · [Npcap](https://npcap.com/)
+
 ---
 
-## Options (bouton ⚙)
+## Options ⚙
 
 | Option | Description |
 |--------|-------------|
-| **Masquer les IP** | Affiche `192.***.***.***` dans le tableau |
-| **Agrandir le tableau** | Cache le bas de page pour plus d'appareils visibles |
-| **Temps de chargement** | Durée du splash au démarrage (0–5 s) |
-
----
-
-## Prérequis
-
-Windows 10/11 · Python 3.10+ (auto) · [Npcap](https://npcap.com/) pour l'ARP
+| Masquer les IP | Masque IP + réseau affiché en haut |
+| Agrandir le tableau | Plus d'appareils visibles |
+| Temps de chargement | Splash 0–5 s |
 
 ---
 
@@ -38,10 +35,10 @@ Windows 10/11 · Python 3.10+ (auto) · [Npcap](https://npcap.com/) pour l'ARP
 
 ```
 cupnet/
-├── CupNet.bat       ← lancer ici
-├── LISEZMOI.txt
-├── backend/         ← code source
-└── scripts/         ← outils dev
+├── CupNet.bat      ← lancer ici
+├── docs/           ← site web (GitHub Pages)
+├── backend/        ← code source
+└── scripts/        ← outils dev (optionnel)
 ```
 
 ---
