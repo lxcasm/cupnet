@@ -70,6 +70,8 @@ class CupNetApp(ctk.CTk):
         self._build_ui()
         self._load_methods_info()
         self._check_admin()
+        self._update_npcap_status()
+        self._refresh_npcap_options()
         self._show_splash()
         self._start_tick()
 
@@ -112,7 +114,14 @@ class CupNetApp(ctk.CTk):
             text="",
             font=ctk.CTkFont(size=11, weight="bold"),
         )
-        self.admin_label.pack(side="top", anchor="e", pady=(0, 6))
+        self.admin_label.pack(side="top", anchor="e", pady=(0, 4))
+
+        self.npcap_label = ctk.CTkLabel(
+            actions,
+            text="",
+            font=ctk.CTkFont(size=11, weight="bold"),
+        )
+        self.npcap_label.pack(side="top", anchor="e", pady=(0, 6))
 
         row = ctk.CTkFrame(actions, fg_color="transparent")
         row.pack(side="top", anchor="e")
@@ -211,6 +220,17 @@ class CupNetApp(ctk.CTk):
             text_color=GIRO["text_muted"],
         )
         self.splash_value_label.grid(row=2, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 12))
+
+        self.npcap_install_btn = ctk.CTkButton(
+            self.options_frame,
+            text="Installer Npcap (requis pour scan et coupure ARP)",
+            height=34,
+            fg_color=GIRO["violet"],
+            hover_color=GIRO["violet_dark"],
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self._on_install_npcap_click,
+        )
+        self.npcap_install_btn.grid(row=3, column=0, columnspan=3, sticky="ew", padx=14, pady=(0, 12))
 
         self.options_frame.grid_remove()
 
@@ -504,6 +524,64 @@ class CupNetApp(ctk.CTk):
                 text_color=GIRO["pink_light"],
             )
 
+    def _update_npcap_status(self) -> None:
+        if is_npcap_installed():
+            self.npcap_label.configure(text="● Npcap OK", text_color=GIRO["success"])
+        else:
+            self.npcap_label.configure(
+                text="● Npcap absent — scan ARP impossible",
+                text_color=GIRO["pink_light"],
+            )
+
+    def _refresh_npcap_options(self) -> None:
+        if is_npcap_installed():
+            self.npcap_install_btn.grid_remove()
+        else:
+            self.npcap_install_btn.grid()
+
+    def _npcap_missing_message(self) -> str:
+        return (
+            "Npcap n'est pas installé sur ce PC.\n\n"
+            "Sans Npcap, le scan réseau et la coupure ARP ne fonctionneront pas.\n\n"
+            "Souhaitez-vous l'installer maintenant ?\n"
+            "(Optionnel — vous pourrez aussi le faire plus tard via ⚙)\n\n"
+            "CupNet téléchargera l'installateur officiel, puis vous devrez "
+            "accepter la licence dans la fenêtre Npcap."
+        )
+
+    def _prompt_npcap_install(self) -> bool:
+        if is_npcap_installed():
+            messagebox.showinfo("Npcap", "Npcap est déjà installé.")
+            self._update_npcap_status()
+            self._refresh_npcap_options()
+            return False
+
+        if not self.manager.is_admin:
+            messagebox.showwarning(
+                "Npcap requis",
+                "Npcap n'est pas installé.\n\n"
+                "Relancez CupNet en administrateur (OUI sur UAC) pour l'installer "
+                "depuis l'application.\n\n"
+                f"Installation manuelle : {NPCAP_SITE}",
+            )
+            return False
+
+        return messagebox.askyesno("Installer Npcap ?", self._npcap_missing_message())
+
+    def _on_install_npcap_click(self) -> None:
+        if self._prompt_npcap_install():
+            self._run_npcap_install(startup=False)
+
+    def _mark_npcap_missing(self) -> None:
+        self._update_npcap_status()
+        self._refresh_npcap_options()
+        self.status_label.configure(text="⚠ Npcap absent — scan et coupure ARP indisponibles")
+
+    def _mark_npcap_ready(self) -> None:
+        self._update_npcap_status()
+        self._refresh_npcap_options()
+        self.status_label.configure(text="Npcap détecté — prêt à scanner le réseau")
+
     def _toggle_options(self) -> None:
         if self._options_visible:
             self.options_frame.grid_remove()
@@ -594,36 +672,35 @@ class CupNetApp(ctk.CTk):
 
     def _ensure_npcap(self) -> None:
         if is_npcap_installed():
+            self._update_npcap_status()
+            self._refresh_npcap_options()
             self._finish_startup()
             return
+
+        self._update_npcap_status()
+        self._refresh_npcap_options()
 
         if not self.manager.is_admin:
             messagebox.showwarning(
                 "Npcap requis",
-                "Npcap n'est pas installé sur ce PC.\n\n"
-                "Relancez CupNet en administrateur (cliquez OUI sur UAC) "
-                "pour pouvoir l'installer automatiquement.\n\n"
-                f"Installation manuelle : {NPCAP_SITE}",
+                "Npcap n'est pas installé.\n\n"
+                "Sans Npcap, le scan et la coupure ARP ne marcheront pas.\n\n"
+                "Relancez CupNet en administrateur (OUI sur UAC) pour pouvoir "
+                "l'installer depuis ⚙, ou installez-le manuellement :\n"
+                f"{NPCAP_SITE}",
             )
-            self.status_label.configure(text="⚠ Npcap absent — scan ARP indisponible")
+            self._mark_npcap_missing()
             self._finish_startup()
             return
 
-        if not messagebox.askyesno(
-            "Installer Npcap ?",
-            "Npcap n'est pas détecté.\n\n"
-            "Il est nécessaire pour scanner le réseau et la coupure ARP.\n\n"
-            "CupNet va télécharger l'installateur officiel puis l'ouvrir.\n"
-            "Acceptez la licence dans la fenêtre Npcap.\n\n"
-            "Continuer ?",
-        ):
-            self.status_label.configure(text="⚠ Npcap absent — scan ARP indisponible")
-            self._finish_startup()
+        if self._prompt_npcap_install():
+            self._run_npcap_install(startup=True)
             return
 
-        self._run_npcap_install()
+        self._mark_npcap_missing()
+        self._finish_startup()
 
-    def _run_npcap_install(self) -> None:
+    def _run_npcap_install(self, startup: bool = True) -> None:
         dialog = ctk.CTkToplevel(self)
         dialog.title("Installation Npcap")
         dialog.resizable(False, False)
@@ -684,8 +761,9 @@ class CupNetApp(ctk.CTk):
                 f"Impossible d'installer Npcap automatiquement.\n\n{error}\n\n"
                 f"Téléchargez-le manuellement : {NPCAP_SITE}",
             )
-            self.status_label.configure(text="⚠ Npcap absent — scan ARP indisponible")
-            self._finish_startup()
+            self._mark_npcap_missing()
+            if startup:
+                self._finish_startup()
 
         def on_done(code: int, message: str) -> None:
             dialog.grab_release()
@@ -698,14 +776,15 @@ class CupNetApp(ctk.CTk):
                     )
                 else:
                     messagebox.showinfo("Npcap installé", "Npcap est prêt. Vous pouvez scanner le réseau.")
-                self.status_label.configure(text="Npcap détecté — prêt à scanner")
+                self._mark_npcap_ready()
             else:
                 messagebox.showwarning(
                     "Npcap",
                     f"{message}\n\nInstallez Npcap manuellement : {NPCAP_SITE}",
                 )
-                self.status_label.configure(text="⚠ Npcap absent — scan ARP indisponible")
-            self._finish_startup()
+                self._mark_npcap_missing()
+            if startup:
+                self._finish_startup()
 
         def worker() -> None:
             try:
