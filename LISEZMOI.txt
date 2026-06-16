@@ -1,0 +1,18 @@
+╔══════════════════════════════════════════╗
+║              C U P N E T                 ║
+║         par lxcasm — v2.1                ║
+╚══════════════════════════════════════════╝
+
+  LANCER L'APPLICATION
+  ────────────────────
+  Double-cliquez sur :  CupNet.bat
+
+  Site web : https://lxcasm.github.io/cupnet
+
+  COUPURE RESEAU (ARP)
+  ────────────────────
+  Acceptez UAC (admin). Si Npcap manque, CupNet propose de l'installer au lancement.
+
+  GITHUB
+  ──────
+  https://github.com/lxcasm/cupnet

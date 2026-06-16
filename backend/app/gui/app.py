@@ -1,0 +1,1141 @@
+import threading
+import tkinter as tk
+import tkinter.ttk as ttk
+import webbrowser
+from pathlib import Path
+from tkinter import messagebox
+
+import customtkinter as ctk
+
+from app.core.device_manager import DeviceManager
+from app.core.network_utils import format_duration
+from app.core.npcap_utils import (
+    NPCAP_SITE,
+    download_npcap,
+    is_npcap_installed,
+    run_npcap_installer,
+)
+from app.gui.settings import AppSettings
+from app.gui.theme import GIRO
+from app.models.device import BlockMethod, Device
+
+APP_VERSION = "2.1.1"
+CREATOR = "lxcasm"
+GITHUB_URL = f"https://github.com/{CREATOR}"
+
+
+def mask_ip(ip: str) -> str:
+    parts = ip.split(".")
+    if len(parts) == 4:
+        return f"{parts[0]}.***.***.***"
+    return "••• masquée •••"
+
+
+def mask_network(network: str) -> str:
+    if "/" in network:
+        base, prefix = network.rsplit("/", 1)
+        parts = base.split(".")
+        if len(parts) == 4:
+            return f"{parts[0]}.***.***.0/{prefix}"
+    return mask_ip(network)
+
+METHOD_LABELS = {
+    BlockMethod.ARP_SPOOF: "Coupure réseau (ARP)",
+    BlockMethod.FIREWALL: "Pare-feu local (PC)",
+    BlockMethod.PING_FLOOD: "Ping Flood",
+}
+
+
+class CupNetApp(ctk.CTk):
+    def __init__(self) -> None:
+        super().__init__()
+
+        self.manager = DeviceManager()
+        self.settings = AppSettings()
+        self._scanning = False
+        self._tick_job: str | None = None
+        self._splash_job: str | None = None
+        self._options_visible = False
+        self._cached_network = "—"
+        self._cached_interface = "—"
+        self._startup_finished = False
+
+        self.title(f"CupNet v{APP_VERSION} — contrôle réseau")
+        self.geometry("1280x820")
+        self.minsize(1000, 700)
+        self.configure(fg_color=GIRO["bg"])
+
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("dark-blue")
+
+        self._build_ui()
+        self._load_methods_info()
+        self._check_admin()
+        self._update_npcap_status()
+        self._refresh_npcap_options()
+        self._show_splash()
+        self._start_tick()
+
+    def _build_ui(self) -> None:
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(5, weight=1)
+
+        # Bandeau rose
+        stripe = ctk.CTkFrame(self, height=5, fg_color=GIRO["pink"], corner_radius=0)
+        stripe.grid(row=0, column=0, sticky="ew")
+
+        # Header (2 lignes : titre | badges + boutons scan/paramètres)
+        self.header = ctk.CTkFrame(self, fg_color=GIRO["bg_header"], corner_radius=0, height=118)
+        self.header.grid(row=1, column=0, sticky="ew")
+        self.header.grid_columnconfigure(1, weight=1)
+        self.header.grid_propagate(False)
+
+        brand = ctk.CTkFrame(self.header, fg_color="transparent")
+        brand.grid(row=0, column=0, rowspan=2, sticky="nw", padx=22, pady=14)
+
+        ctk.CTkLabel(
+            brand,
+            text="CupNet",
+            font=ctk.CTkFont(size=30, weight="bold"),
+            text_color=GIRO["pink"],
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            brand,
+            text=f"par {CREATOR} · v{APP_VERSION} · surveillance & coupure réseau",
+            font=ctk.CTkFont(size=13),
+            text_color=GIRO["accent"],
+        ).pack(anchor="w")
+
+        badges = ctk.CTkFrame(self.header, fg_color="transparent")
+        badges.grid(row=0, column=2, sticky="e", padx=22, pady=(14, 0))
+
+        self.admin_label = ctk.CTkLabel(
+            badges,
+            text="",
+            font=ctk.CTkFont(size=11, weight="bold"),
+        )
+        self.admin_label.pack(side="left", padx=(0, 14))
+
+        self.npcap_label = ctk.CTkLabel(
+            badges,
+            text="",
+            font=ctk.CTkFont(size=11, weight="bold"),
+        )
+        self.npcap_label.pack(side="left")
+
+        toolbar = ctk.CTkFrame(self.header, fg_color="transparent")
+        toolbar.grid(row=1, column=1, columnspan=2, sticky="e", padx=22, pady=(8, 14))
+
+        self.network_label = ctk.CTkLabel(
+            toolbar,
+            text="Réseau : —",
+            font=ctk.CTkFont(family="Consolas", size=12),
+            text_color=GIRO["text_muted"],
+        )
+        self.network_label.pack(side="left", padx=(0, 12))
+
+        self.scan_btn = ctk.CTkButton(
+            toolbar,
+            text="⟳  Scanner le réseau",
+            width=175,
+            height=38,
+            fg_color=GIRO["pink"],
+            hover_color=GIRO["pink_dark"],
+            border_width=1,
+            border_color=GIRO["pink_light"],
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._on_scan_click,
+        )
+        self.scan_btn.pack(side="left")
+
+        self.options_btn = ctk.CTkButton(
+            toolbar,
+            text="⚙",
+            width=38,
+            height=38,
+            fg_color=GIRO["violet_dark"],
+            hover_color=GIRO["violet"],
+            command=self._toggle_options,
+        )
+        self.options_btn.pack(side="left", padx=(8, 0))
+
+        # Panneau options (caché)
+        self.options_frame = ctk.CTkFrame(self, fg_color=GIRO["bg_card"], border_width=1, border_color=GIRO["violet"])
+        self.options_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 6))
+        self.options_frame.grid_columnconfigure((0, 1, 2), weight=1)
+
+        ctk.CTkLabel(
+            self.options_frame,
+            text="Options",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=GIRO["pink_light"],
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=14, pady=(10, 6))
+
+        self.hide_ip_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            self.options_frame,
+            text="Masquer les adresses IP",
+            variable=self.hide_ip_var,
+            command=self._on_hide_ip_toggle,
+            fg_color=GIRO["pink"],
+            hover_color=GIRO["pink_dark"],
+            text_color=GIRO["text"],
+        ).grid(row=1, column=0, sticky="w", padx=14, pady=4)
+
+        self.expand_table_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            self.options_frame,
+            text="Agrandir le tableau (masquer infos bas)",
+            variable=self.expand_table_var,
+            command=self._on_expand_table_toggle,
+            fg_color=GIRO["pink"],
+            hover_color=GIRO["pink_dark"],
+            text_color=GIRO["text"],
+        ).grid(row=1, column=1, sticky="w", padx=14, pady=4)
+
+        ctk.CTkLabel(
+            self.options_frame,
+            text="Temps de chargement (s) :",
+            text_color=GIRO["text_muted"],
+        ).grid(row=1, column=2, sticky="e", padx=(0, 6), pady=4)
+
+        self.splash_slider = ctk.CTkSlider(
+            self.options_frame,
+            from_=0,
+            to=5,
+            number_of_steps=10,
+            width=140,
+            fg_color=GIRO["violet_dark"],
+            progress_color=GIRO["pink"],
+            button_color=GIRO["pink_light"],
+            command=self._on_splash_slider,
+        )
+        self.splash_slider.set(self.settings.splash_seconds)
+        self.splash_slider.grid(row=2, column=2, sticky="e", padx=14, pady=(0, 12))
+
+        self.splash_value_label = ctk.CTkLabel(
+            self.options_frame,
+            text=f"{self.settings.splash_seconds:.1f}s au prochain lancement",
+            font=ctk.CTkFont(size=11),
+            text_color=GIRO["text_muted"],
+        )
+        self.splash_value_label.grid(row=2, column=0, columnspan=2, sticky="w", padx=14, pady=(0, 12))
+
+        self.npcap_install_btn = ctk.CTkButton(
+            self.options_frame,
+            text="Installer Npcap (requis pour scan et coupure ARP)",
+            height=34,
+            fg_color=GIRO["violet"],
+            hover_color=GIRO["violet_dark"],
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self._on_install_npcap_click,
+        )
+        self.npcap_install_btn.grid(row=3, column=0, columnspan=3, sticky="ew", padx=14, pady=(0, 12))
+
+        self.options_frame.grid_remove()
+
+        # Stats
+        stats = ctk.CTkFrame(self, fg_color="transparent")
+        stats.grid(row=3, column=0, sticky="ew", padx=20, pady=(12, 6))
+        stats.grid_columnconfigure((0, 1, 2, 3), weight=1)
+
+        self.stat_devices = self._stat_card(stats, "Appareils", "0", 0)
+        self.stat_blocked = self._stat_card(stats, "Bloqués", "0", 1, GIRO["violet"])
+        self.stat_duration = self._stat_card(stats, "Durée scan", "—", 2)
+        self.stat_session = self._stat_card(stats, "Session", "0s", 3, GIRO["accent"])
+
+        # Barre de progression scan
+        progress_frame = ctk.CTkFrame(self, fg_color=GIRO["bg_card"], corner_radius=10)
+        progress_frame.grid(row=4, column=0, sticky="ew", padx=20, pady=(0, 6))
+        progress_frame.grid_columnconfigure(0, weight=1)
+
+        self.progress_label = ctk.CTkLabel(
+            progress_frame,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color=GIRO["pink_light"],
+        )
+        self.progress_label.grid(row=0, column=0, sticky="w", padx=14, pady=(10, 4))
+
+        self.progress_bar = ctk.CTkProgressBar(
+            progress_frame,
+            height=10,
+            fg_color=GIRO["violet_dark"],
+            progress_color=GIRO["pink"],
+        )
+        self.progress_bar.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 12))
+        self.progress_bar.set(0)
+        self.progress_frame = progress_frame
+        self.progress_frame.grid_remove()
+
+        # Table (Treeview natif : hauteur fixe pour ne pas recouvrir le header)
+        self.table_frame = ctk.CTkFrame(
+            self,
+            fg_color=GIRO["bg_card"],
+            border_width=1,
+            border_color=GIRO["violet_dark"],
+        )
+        self.table_frame.grid(row=5, column=0, sticky="nsew", padx=20, pady=(0, 10))
+        self.table_frame.grid_columnconfigure(0, weight=1)
+        self.table_frame.grid_rowconfigure(3, weight=1)
+
+        ctk.CTkLabel(
+            self.table_frame,
+            text="Appareils détectés",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=GIRO["pink_light"],
+        ).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 4))
+
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure(
+            "Giro.Treeview",
+            background=GIRO["bg_table"],
+            foreground=GIRO["text"],
+            fieldbackground=GIRO["bg_table"],
+            borderwidth=0,
+            rowheight=28,
+            font=("Segoe UI", 10),
+        )
+        style.configure(
+            "Giro.Treeview.Heading",
+            background=GIRO["bg_header"],
+            foreground=GIRO["pink"],
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+        )
+        style.map(
+            "Giro.Treeview",
+            background=[("selected", GIRO["selection"])],
+            foreground=[("selected", "#FFFFFF")],
+        )
+
+        tree_host = tk.Frame(self.table_frame, bg=GIRO["bg_table"], highlightthickness=0)
+        tree_host.grid(row=1, column=0, sticky="ew", padx=(12, 0), pady=(0, 4))
+
+        columns = ("status", "ip", "mac", "hostname", "vendor", "online", "ping", "blocked", "method")
+        self.tree = ttk.Treeview(
+            tree_host,
+            columns=columns,
+            show="headings",
+            style="Giro.Treeview",
+            selectmode="browse",
+            height=14,
+        )
+
+        headings = {
+            "status": ("Statut", 80),
+            "ip": ("IP", 110),
+            "mac": ("MAC", 130),
+            "hostname": ("Hôte", 120),
+            "vendor": ("Fabricant", 110),
+            "online": ("Temps réseau", 100),
+            "ping": ("Latence", 70),
+            "blocked": ("Temps bloqué", 100),
+            "method": ("Méthode", 120),
+        }
+        for col, (text, width) in headings.items():
+            self.tree.heading(col, text=text)
+            self.tree.column(col, width=width, anchor="w")
+
+        self.tree.bind("<<TreeviewSelect>>", self._on_select_device)
+
+        scrollbar = ctk.CTkScrollbar(
+            self.table_frame,
+            command=self.tree.yview,
+            button_color=GIRO["violet"],
+            button_hover_color=GIRO["pink"],
+        )
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        scrollbar.grid(row=1, column=1, sticky="ns", pady=(0, 4), padx=(0, 12))
+
+        self.detail_label = ctk.CTkLabel(
+            self.table_frame,
+            text="Sélectionnez un appareil pour voir les détails",
+            font=ctk.CTkFont(size=11),
+            text_color=GIRO["text_muted"],
+            anchor="w",
+            justify="left",
+        )
+        self.detail_label.grid(row=2, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 8))
+
+        ctk.CTkFrame(self.table_frame, fg_color="transparent", height=1).grid(
+            row=3, column=0, columnspan=2, sticky="nsew"
+        )
+
+        # Actions
+        action_bar = ctk.CTkFrame(
+            self,
+            fg_color=GIRO["bg_card"],
+            border_width=1,
+            border_color=GIRO["violet_dark"],
+        )
+        action_bar.grid(row=6, column=0, sticky="ew", padx=20, pady=(0, 10))
+        action_bar.grid_columnconfigure(2, weight=1)
+
+        ctk.CTkLabel(action_bar, text="Méthode :", text_color=GIRO["text_muted"]).grid(
+            row=0, column=0, padx=(14, 6), pady=14
+        )
+
+        self.method_var = ctk.StringVar(value=METHOD_LABELS[BlockMethod.ARP_SPOOF])
+        self.method_menu = ctk.CTkOptionMenu(
+            action_bar,
+            variable=self.method_var,
+            values=list(METHOD_LABELS.values()),
+            width=220,
+            fg_color=GIRO["violet_dark"],
+            button_color=GIRO["violet"],
+            button_hover_color=GIRO["pink"],
+            text_color=GIRO["text"],
+        )
+        self.method_menu.grid(row=0, column=1, padx=(0, 14), pady=14)
+
+        self.block_btn = ctk.CTkButton(
+            action_bar,
+            text="✂  Couper la connexion",
+            fg_color=GIRO["danger"],
+            hover_color=GIRO["danger_dark"],
+            width=185,
+            font=ctk.CTkFont(weight="bold"),
+            command=self._on_block_click,
+        )
+        self.block_btn.grid(row=0, column=3, padx=6, pady=14)
+
+        self.unblock_btn = ctk.CTkButton(
+            action_bar,
+            text="↩  Débloquer",
+            fg_color=GIRO["success"],
+            hover_color=GIRO["success_dark"],
+            width=130,
+            command=self._on_unblock_click,
+        )
+        self.unblock_btn.grid(row=0, column=4, padx=(6, 14), pady=14)
+
+        # Footer
+        self.methods_frame = ctk.CTkFrame(self, fg_color=GIRO["bg_card"])
+        self.methods_frame.grid(row=7, column=0, sticky="ew", padx=20, pady=(0, 8))
+
+        ctk.CTkLabel(
+            self.methods_frame,
+            text="Méthodes de coupure",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=GIRO["violet"],
+        ).pack(anchor="w", padx=14, pady=(10, 4))
+
+        self.methods_text = ctk.CTkTextbox(
+            self.methods_frame,
+            height=72,
+            font=ctk.CTkFont(size=12),
+            fg_color=GIRO["bg_table"],
+            text_color=GIRO["text_muted"],
+            activate_scrollbars=False,
+        )
+        self.methods_text.pack(fill="x", padx=14, pady=(0, 10))
+        self.methods_text.configure(state="disabled")
+
+        self.footer_label = ctk.CTkLabel(
+            self,
+            text=f"⚠️ Usage éducatif — par {CREATOR} · github.com/{CREATOR}",
+            font=ctk.CTkFont(size=11),
+            text_color=GIRO["text_muted"],
+        )
+        self.footer_label.grid(row=8, column=0, pady=(0, 4))
+
+        self.status_label = ctk.CTkLabel(
+            self,
+            text="Prêt — cliquez sur « Scanner le réseau »",
+            font=ctk.CTkFont(size=11),
+            text_color=GIRO["text_muted"],
+        )
+        self.status_label.grid(row=9, column=0, pady=(0, 12))
+
+        # Treeview natif : remonter header / stats au-dessus du tableau
+        for widget in (
+            stripe,
+            self.header,
+            stats,
+            self.progress_frame,
+            self.options_frame,
+            action_bar,
+            self.methods_frame,
+            self.footer_label,
+            self.status_label,
+        ):
+            widget.lift()
+        self.table_frame.lower()
+
+        # Écran de chargement (splash)
+        self.splash_overlay = ctk.CTkFrame(self, fg_color=GIRO["bg"], corner_radius=0)
+        self.splash_overlay.grid(row=0, column=0, rowspan=10, sticky="nsew")
+        self.splash_overlay.grid_columnconfigure(0, weight=1)
+        self.splash_overlay.grid_rowconfigure(0, weight=1)
+
+        splash_box = ctk.CTkFrame(self.splash_overlay, fg_color=GIRO["bg_card"], border_width=1, border_color=GIRO["pink"])
+        splash_box.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.42, relheight=0.32)
+
+        ctk.CTkLabel(
+            splash_box,
+            text="CupNet",
+            font=ctk.CTkFont(size=36, weight="bold"),
+            text_color=GIRO["pink"],
+        ).pack(pady=(28, 4))
+
+        ctk.CTkLabel(
+            splash_box,
+            text=f"par {CREATOR} · v{APP_VERSION}",
+            font=ctk.CTkFont(size=13),
+            text_color=GIRO["accent"],
+        ).pack(pady=(0, 16))
+
+        self.splash_status = ctk.CTkLabel(
+            splash_box,
+            text="Chargement…",
+            font=ctk.CTkFont(size=12),
+            text_color=GIRO["text_muted"],
+        )
+        self.splash_status.pack(pady=(0, 8))
+
+        self.splash_bar = ctk.CTkProgressBar(
+            splash_box,
+            width=280,
+            height=12,
+            fg_color=GIRO["violet_dark"],
+            progress_color=GIRO["pink"],
+        )
+        self.splash_bar.pack(pady=(0, 24))
+        self.splash_bar.set(0)
+
+        self._splash_step = 0
+        self._splash_steps = 1
+
+    def _stat_card(
+        self, parent: ctk.CTkFrame, label: str, value: str, col: int, color: str | None = None
+    ) -> ctk.CTkLabel:
+        card = ctk.CTkFrame(
+            parent,
+            fg_color=GIRO["bg_card"],
+            border_width=1,
+            border_color=GIRO["pink_dark"],
+            corner_radius=10,
+        )
+        card.grid(row=0, column=col, sticky="ew", padx=5, pady=4)
+
+        value_lbl = ctk.CTkLabel(
+            card,
+            text=value,
+            font=ctk.CTkFont(size=26, weight="bold"),
+            text_color=color or GIRO["pink"],
+        )
+        value_lbl.pack(pady=(12, 0))
+
+        ctk.CTkLabel(
+            card,
+            text=label,
+            font=ctk.CTkFont(size=11),
+            text_color=GIRO["text_muted"],
+        ).pack(pady=(0, 12))
+
+        return value_lbl
+
+    def _check_admin(self) -> None:
+        if self.manager.is_admin:
+            self.admin_label.configure(text="● Admin", text_color=GIRO["success"])
+        else:
+            self.admin_label.configure(
+                text="● Pas admin — coupez en ARP impossible",
+                text_color=GIRO["pink_light"],
+            )
+
+    def _update_npcap_status(self) -> None:
+        if is_npcap_installed():
+            self.npcap_label.configure(text="● Npcap OK", text_color=GIRO["success"])
+        else:
+            self.npcap_label.configure(
+                text="● Npcap absent — scan ARP impossible",
+                text_color=GIRO["pink_light"],
+            )
+
+    def _refresh_npcap_options(self) -> None:
+        if is_npcap_installed():
+            self.npcap_install_btn.grid_remove()
+        else:
+            self.npcap_install_btn.grid()
+
+    def _npcap_missing_message(self) -> str:
+        return (
+            "Npcap n'est pas installé sur ce PC.\n\n"
+            "Sans Npcap, le scan réseau et la coupure ARP ne fonctionneront pas.\n\n"
+            "Souhaitez-vous l'installer maintenant ?\n"
+            "(Optionnel — vous pourrez aussi le faire plus tard via ⚙)\n\n"
+            "CupNet téléchargera l'installateur officiel, puis vous devrez "
+            "accepter la licence dans la fenêtre Npcap."
+        )
+
+    def _prompt_npcap_install(self) -> bool:
+        if is_npcap_installed():
+            messagebox.showinfo("Npcap", "Npcap est déjà installé.")
+            self._update_npcap_status()
+            self._refresh_npcap_options()
+            return False
+
+        if not self.manager.is_admin:
+            messagebox.showwarning(
+                "Npcap requis",
+                "Npcap n'est pas installé.\n\n"
+                "Relancez CupNet en administrateur (OUI sur UAC) pour l'installer "
+                "depuis l'application.\n\n"
+                f"Installation manuelle : {NPCAP_SITE}",
+            )
+            return False
+
+        return messagebox.askyesno("Installer Npcap ?", self._npcap_missing_message())
+
+    def _on_install_npcap_click(self) -> None:
+        if self._prompt_npcap_install():
+            self._run_npcap_install(startup=False)
+
+    def _mark_npcap_missing(self) -> None:
+        self._update_npcap_status()
+        self._refresh_npcap_options()
+        self.status_label.configure(text="⚠ Npcap absent — scan et coupure ARP indisponibles")
+
+    def _mark_npcap_ready(self) -> None:
+        self._update_npcap_status()
+        self._refresh_npcap_options()
+        self.status_label.configure(text="Npcap détecté — prêt à scanner le réseau")
+
+    def _toggle_options(self) -> None:
+        if self._options_visible:
+            self.options_frame.grid_remove()
+            self._options_visible = False
+        else:
+            self.options_frame.grid()
+            self._options_visible = True
+
+    def _display_ip(self, ip: str) -> str:
+        if self.settings.hide_ip:
+            return mask_ip(ip)
+        return ip
+
+    def _on_hide_ip_toggle(self) -> None:
+        self.settings.hide_ip = self.hide_ip_var.get()
+        self._update_network_label()
+        if self.manager.get_devices():
+            self._refresh_table(self.manager.get_devices(), keep_selection=True)
+        mac = self._get_selected_mac()
+        if mac:
+            self._on_select_device()
+
+    def _update_network_label(self, network: str | None = None, interface: str | None = None) -> None:
+        if network is not None:
+            self._cached_network = network
+        if interface is not None:
+            self._cached_interface = interface
+        net = self._cached_network
+        if self.settings.hide_ip and net != "—":
+            net = mask_network(net)
+        self.network_label.configure(text=f"Réseau : {net} ({self._cached_interface})")
+
+    def _on_expand_table_toggle(self) -> None:
+        self.settings.expand_table = self.expand_table_var.get()
+        self._apply_expand_table()
+
+    def _apply_expand_table(self) -> None:
+        if self.settings.expand_table:
+            self.methods_frame.grid_remove()
+            self.footer_label.grid_remove()
+            self.detail_label.grid_remove()
+            self.geometry("1280x860")
+        else:
+            self.methods_frame.grid()
+            self.footer_label.grid()
+            self.detail_label.grid()
+            self.geometry("1280x820")
+
+    def _on_splash_slider(self, value: float) -> None:
+        self.settings.splash_seconds = round(value, 1)
+        self.splash_value_label.configure(
+            text=f"{self.settings.splash_seconds:.1f}s au prochain lancement"
+        )
+
+    def _show_splash(self) -> None:
+        duration = max(0.0, self.settings.splash_seconds)
+        if duration <= 0:
+            self.splash_overlay.grid_remove()
+            self.after(150, self._ensure_npcap)
+            return
+        self.splash_overlay.lift()
+        self._splash_step = 0
+        self._splash_steps = max(12, int(duration * 24))
+        self._animate_splash()
+
+    def _animate_splash(self) -> None:
+        self._splash_step += 1
+        pct = min(1.0, self._splash_step / self._splash_steps)
+        self.splash_bar.set(pct)
+        if pct < 0.35:
+            self.splash_status.configure(text="Initialisation…")
+        elif pct < 0.75:
+            self.splash_status.configure(text="Chargement de l'interface…")
+        else:
+            self.splash_status.configure(text="Prêt")
+        if self._splash_step >= self._splash_steps:
+            self.splash_overlay.grid_remove()
+            self._ensure_npcap()
+            return
+        delay = max(40, int(self.settings.splash_seconds * 1000 / self._splash_steps))
+        self._splash_job = self.after(delay, self._animate_splash)
+
+    def _finish_startup(self) -> None:
+        if self._startup_finished:
+            return
+        self._startup_finished = True
+        self._show_profile_popup()
+
+    def _ensure_npcap(self) -> None:
+        if is_npcap_installed():
+            self._update_npcap_status()
+            self._refresh_npcap_options()
+            self._finish_startup()
+            return
+
+        self._update_npcap_status()
+        self._refresh_npcap_options()
+
+        if not self.manager.is_admin:
+            messagebox.showwarning(
+                "Npcap requis",
+                "Npcap n'est pas installé.\n\n"
+                "Sans Npcap, le scan et la coupure ARP ne marcheront pas.\n\n"
+                "Relancez CupNet en administrateur (OUI sur UAC) pour pouvoir "
+                "l'installer depuis ⚙, ou installez-le manuellement :\n"
+                f"{NPCAP_SITE}",
+            )
+            self._mark_npcap_missing()
+            self._finish_startup()
+            return
+
+        if self._prompt_npcap_install():
+            self._run_npcap_install(startup=True)
+            return
+
+        self._mark_npcap_missing()
+        self._finish_startup()
+
+    def _run_npcap_install(self, startup: bool = True) -> None:
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Installation Npcap")
+        dialog.resizable(False, False)
+        dialog.configure(fg_color=GIRO["bg"])
+        dialog.transient(self)
+        dialog.grab_set()
+
+        width, height = 460, 220
+        dialog.update_idletasks()
+        x = self.winfo_x() + max(0, (self.winfo_width() - width) // 2)
+        y = self.winfo_y() + max(0, (self.winfo_height() - height) // 2)
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+        box = ctk.CTkFrame(
+            dialog,
+            fg_color=GIRO["bg_card"],
+            border_width=1,
+            border_color=GIRO["pink"],
+            corner_radius=12,
+        )
+        box.pack(fill="both", expand=True, padx=16, pady=16)
+
+        title = ctk.CTkLabel(
+            box,
+            text="Installation de Npcap",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=GIRO["pink"],
+        )
+        title.pack(pady=(18, 8))
+
+        status = ctk.CTkLabel(
+            box,
+            text="Préparation…",
+            font=ctk.CTkFont(size=12),
+            text_color=GIRO["text_muted"],
+        )
+        status.pack(pady=(0, 10))
+
+        bar = ctk.CTkProgressBar(
+            box,
+            width=360,
+            height=12,
+            fg_color=GIRO["violet_dark"],
+            progress_color=GIRO["pink"],
+        )
+        bar.pack(pady=(0, 18))
+        bar.set(0)
+
+        def on_progress(pct: int, message: str) -> None:
+            status.configure(text=message)
+            bar.set(max(0.05, min(1.0, pct / 100)))
+
+        def on_error(error: str) -> None:
+            dialog.grab_release()
+            dialog.destroy()
+            messagebox.showerror(
+                "Npcap",
+                f"Impossible d'installer Npcap automatiquement.\n\n{error}\n\n"
+                f"Téléchargez-le manuellement : {NPCAP_SITE}",
+            )
+            self._mark_npcap_missing()
+            if startup:
+                self._finish_startup()
+
+        def on_done(code: int, message: str) -> None:
+            dialog.grab_release()
+            dialog.destroy()
+            if is_npcap_installed():
+                if code == 3010:
+                    messagebox.showinfo(
+                        "Npcap installé",
+                        f"{message}\n\nRedémarrez le PC si le scan échoue encore.",
+                    )
+                else:
+                    messagebox.showinfo("Npcap installé", "Npcap est prêt. Vous pouvez scanner le réseau.")
+                self._mark_npcap_ready()
+            else:
+                messagebox.showwarning(
+                    "Npcap",
+                    f"{message}\n\nInstallez Npcap manuellement : {NPCAP_SITE}",
+                )
+                self._mark_npcap_missing()
+            if startup:
+                self._finish_startup()
+
+        def worker() -> None:
+            try:
+                installer = download_npcap(
+                    on_progress=lambda pct, msg: self.after(
+                        0, lambda p=pct, m=msg: on_progress(p, m)
+                    )
+                )
+                self.after(0, lambda: on_progress(100, "Lancement de l'installateur Npcap…"))
+                code, message = run_npcap_installer(Path(installer))
+                self.after(0, lambda c=code, m=message: on_done(c, m))
+            except Exception as exc:
+                self.after(0, lambda e=str(exc): on_error(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_profile_popup(self) -> None:
+        popup = ctk.CTkToplevel(self)
+        popup.title("Créateur")
+        popup.resizable(False, False)
+        popup.configure(fg_color=GIRO["bg"])
+        popup.transient(self)
+        popup.grab_set()
+
+        width, height = 440, 300
+        popup.update_idletasks()
+        x = self.winfo_x() + max(0, (self.winfo_width() - width) // 2)
+        y = self.winfo_y() + max(0, (self.winfo_height() - height) // 2)
+        popup.geometry(f"{width}x{height}+{x}+{y}")
+
+        box = ctk.CTkFrame(
+            popup,
+            fg_color=GIRO["bg_card"],
+            border_width=1,
+            border_color=GIRO["pink"],
+            corner_radius=12,
+        )
+        box.pack(fill="both", expand=True, padx=16, pady=16)
+
+        ctk.CTkLabel(
+            box,
+            text="CupNet",
+            font=ctk.CTkFont(size=28, weight="bold"),
+            text_color=GIRO["pink"],
+        ).pack(pady=(20, 4))
+
+        ctk.CTkLabel(
+            box,
+            text=f"Projet par {CREATOR}",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=GIRO["text"],
+        ).pack(pady=(0, 8))
+
+        ctk.CTkLabel(
+            box,
+            text="Retrouvez le code source, les mises à jour\net mes autres projets sur GitHub.",
+            font=ctk.CTkFont(size=12),
+            text_color=GIRO["text_muted"],
+            justify="center",
+        ).pack(pady=(0, 16))
+
+        ctk.CTkButton(
+            box,
+            text=f"github.com/{CREATOR}",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=GIRO["violet"],
+            hover_color=GIRO["violet_dark"],
+            height=38,
+            command=lambda: webbrowser.open(GITHUB_URL),
+        ).pack(pady=(0, 10), padx=24, fill="x")
+
+        btn_row = ctk.CTkFrame(box, fg_color="transparent")
+        btn_row.pack(fill="x", padx=24, pady=(0, 18))
+
+        ctk.CTkButton(
+            btn_row,
+            text="Continuer",
+            fg_color=GIRO["pink"],
+            hover_color=GIRO["pink_dark"],
+            height=36,
+            command=popup.destroy,
+        ).pack(side="right")
+
+        popup.protocol("WM_DELETE_WINDOW", popup.destroy)
+        popup.focus_force()
+
+    def _format_device_summary(self, mac: str) -> str:
+        text = self.manager.get_device_summary(mac)
+        if not self.settings.hide_ip or not text:
+            return text
+        device = next((d for d in self.manager.get_devices() if d.mac == mac), None)
+        if device:
+            return text.replace(device.ip, mask_ip(device.ip))
+        return text
+
+    def _show_progress(self, visible: bool) -> None:
+        if visible:
+            self.progress_frame.grid()
+        else:
+            self.progress_frame.grid_remove()
+            self.progress_bar.set(0)
+            self.progress_label.configure(text="")
+
+    def _update_progress(self, pct: int, message: str) -> None:
+        self.progress_bar.set(max(0.0, min(1.0, pct / 100)))
+        self.progress_label.configure(text=message)
+        self._set_status(message)
+
+    def _start_tick(self) -> None:
+        self._tick()
+
+    def _tick(self) -> None:
+        self.stat_session.configure(text=format_duration(self.manager.session_duration_sec))
+        if self.manager.has_blocked_devices() and not self._scanning:
+            self._refresh_table(self.manager.get_devices(), keep_selection=True)
+        self._tick_job = self.after(1000, self._tick)
+
+    def _load_methods_info(self) -> None:
+        lines = []
+        for method in self.manager.get_methods():
+            admin = " [Admin]" if method["requires_admin"] else ""
+            lines.append(f"• {method['label']}{admin} — {method['description']}")
+
+        self.methods_text.configure(state="normal")
+        self.methods_text.delete("1.0", "end")
+        self.methods_text.insert("1.0", "\n".join(lines))
+        self.methods_text.configure(state="disabled")
+
+    def _set_status(self, text: str) -> None:
+        self.status_label.configure(text=text)
+
+    def _set_busy(self, busy: bool) -> None:
+        state = "disabled" if busy else "normal"
+        self.scan_btn.configure(state=state)
+        self.block_btn.configure(state=state)
+        self.unblock_btn.configure(state=state)
+
+    def _method_from_label(self, label: str) -> BlockMethod:
+        for method, name in METHOD_LABELS.items():
+            if name == label:
+                return method
+        return BlockMethod.ARP_SPOOF
+
+    def _get_selected_mac(self) -> str | None:
+        selection = self.tree.selection()
+        if not selection:
+            return None
+        return selection[0]
+
+    def _device_to_row(self, device: Device) -> tuple:
+        status = "🔴 Bloqué" if device.blocked else "🟢 En ligne"
+        online = (
+            format_duration(device.online_duration_sec)
+            if device.online_duration_sec
+            else "—"
+        )
+        ping = f"{device.ping_ms} ms" if device.ping_ms is not None else "—"
+        blocked_time = (
+            format_duration(device.block_duration_sec)
+            if device.blocked and device.block_duration_sec is not None
+            else "—"
+        )
+        method = METHOD_LABELS.get(device.block_method, "—") if device.blocked else "—"
+        return (
+            status,
+            self._display_ip(device.ip),
+            device.mac,
+            device.hostname or "—",
+            device.vendor or "—",
+            online,
+            ping,
+            blocked_time,
+            method,
+        )
+
+    def _refresh_table(self, devices: list[Device], keep_selection: bool = False) -> None:
+        selected = self._get_selected_mac() if keep_selection else None
+
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        for device in devices:
+            self.tree.insert("", "end", iid=device.mac, values=self._device_to_row(device))
+
+        if selected and selected in [d.mac for d in devices]:
+            self.tree.selection_set(selected)
+
+        blocked = sum(1 for d in devices if d.blocked)
+        self.stat_devices.configure(text=str(len(devices)))
+        self.stat_blocked.configure(text=str(blocked))
+
+    def _on_select_device(self, _event=None) -> None:
+        mac = self._get_selected_mac()
+        if mac:
+            self.detail_label.configure(text=self._format_device_summary(mac))
+
+    def _on_scan_click(self) -> None:
+        if self._scanning:
+            return
+
+        self._scanning = True
+        self._set_busy(True)
+        self._show_progress(True)
+        self._update_progress(0, "Scan du réseau en cours…")
+
+        def progress(pct: int, message: str) -> None:
+            self.after(0, lambda: self._update_progress(pct, message))
+
+        def run() -> None:
+            try:
+                result = self.manager.scan(progress_cb=progress)
+                self.after(0, lambda: self._on_scan_done(result.devices, result.warning, None))
+            except Exception as exc:
+                self.after(0, lambda: self._on_scan_done([], None, str(exc)))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_scan_done(
+        self, devices: list[Device], warning: str | None, error: str | None
+    ) -> None:
+        self._scanning = False
+        self._set_busy(False)
+        self._show_progress(False)
+
+        if error:
+            self._set_status(f"Erreur : {error}")
+            messagebox.showerror("Scan échoué", error)
+            return
+
+        self._refresh_table(devices)
+        duration = self.manager.last_duration_ms / 1000
+        self.stat_duration.configure(text=f"{duration:.1f}s")
+        self._update_network_label(self.manager.last_network, self.manager.last_interface)
+        self._set_status(f"{len(devices)} appareil(s) détecté(s) en {duration:.1f}s")
+
+        if warning:
+            messagebox.showwarning("Attention réseau", warning)
+
+    def _on_block_click(self) -> None:
+        mac = self._get_selected_mac()
+        if not mac:
+            messagebox.showwarning("Aucune sélection", "Sélectionnez un appareil dans la liste.")
+            return
+
+        device = next((d for d in self.manager.get_devices() if d.mac == mac), None)
+        if device and device.blocked:
+            messagebox.showinfo("Déjà bloqué", f"{device.ip} est déjà bloqué.")
+            return
+
+        method = self._method_from_label(self.method_var.get())
+        ip = self._display_ip(device.ip) if device else mac
+
+        confirm = (
+            f"Couper la connexion de {ip} via « {METHOD_LABELS[method]} » ?"
+        )
+        if method == BlockMethod.FIREWALL:
+            confirm += (
+                "\n\n⚠ Ce mode bloque uniquement le trafic entre CE PC et la cible. "
+                "Il ne coupe pas l'Internet de l'appareil sur tout le réseau."
+            )
+        elif method == BlockMethod.PING_FLOOD:
+            confirm += (
+                "\n\n⚠ Ping Flood est une démo légère : il ne coupe généralement pas "
+                "complètement la connexion. Préférez « Coupure réseau (ARP) »."
+            )
+        elif method == BlockMethod.ARP_SPOOF and not self.manager.is_admin:
+            confirm += (
+                "\n\n⚠ Relancez CupNet en administrateur (OUI sur UAC) "
+                "sinon la coupure ARP échouera."
+            )
+
+        if not messagebox.askyesno("Confirmer la coupure", confirm):
+            return
+
+        self._set_busy(True)
+        self._set_status(f"Coupure de {ip}…")
+
+        def run() -> None:
+            try:
+                _updated, msg = self.manager.block(mac, method)
+                self.after(0, lambda: self._on_action_done(msg, None))
+            except Exception as exc:
+                self.after(0, lambda: self._on_action_done("", str(exc)))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_unblock_click(self) -> None:
+        mac = self._get_selected_mac()
+        if not mac:
+            messagebox.showwarning("Aucune sélection", "Sélectionnez un appareil dans la liste.")
+            return
+
+        self._set_busy(True)
+        self._set_status("Déblocage en cours…")
+
+        def run() -> None:
+            try:
+                _updated, msg = self.manager.unblock(mac)
+                self.after(0, lambda: self._on_action_done(msg, None))
+            except Exception as exc:
+                self.after(0, lambda: self._on_action_done("", str(exc)))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_action_done(self, message: str, error: str | None) -> None:
+        self._set_busy(False)
+
+        if error:
+            self._set_status(f"Erreur : {error}")
+            messagebox.showerror("Échec", error)
+            return
+
+        self._refresh_table(self.manager.get_devices())
+        mac = self._get_selected_mac()
+        if mac:
+            self.detail_label.configure(text=self._format_device_summary(mac))
+        self._set_status(message)
+        messagebox.showinfo("Succès", message)
+
+    def destroy(self) -> None:
+        if self._tick_job:
+            self.after_cancel(self._tick_job)
+        if self._splash_job:
+            self.after_cancel(self._splash_job)
+        super().destroy()
+
+
+def run_app() -> None:
+    app = CupNetApp()
+    app.mainloop()
